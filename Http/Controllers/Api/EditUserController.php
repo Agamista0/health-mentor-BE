@@ -35,7 +35,7 @@ class EditUserController extends Controller
                 'hair_color' => $request->hair_color,
             ];
         
-            $user->update($userData);
+            $user->update(attributes: $userData);
             $user->avatar()->update($avatarData);
         }
         return response()->json([

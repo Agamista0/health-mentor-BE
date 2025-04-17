@@ -8,46 +8,39 @@ use App\Models\User;
 use App\Response\ApiResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\DB;
 
 class GetAccountsController extends Controller
 {
     public function index()
     {
         try {
-            // Get the authenticated user
+            // Get authenticated user
             $authUser = auth()->user();
             
-            if (!$authUser) {
-                return ApiResponse::error(
-                    'Authentication failed',
-                    ['auth' => ['User not authenticated']],
-                    401
-                );
-            }
-
             // Get accounts based on user type
             $accounts = $this->getUserAccounts($authUser);
 
-            // Add current user to accounts list
-            $authUser->is_current = 1;
-            $accounts->push($authUser);
+            // Prepare response data
+            $responseData = [
+                'current_user' => new AccountResource($authUser),
+                'other_accounts' => AccountResource::collection($accounts),
+                'total_accounts' => count($accounts) + 1,
+            ];
 
-            // Return success response
-            return ApiResponse::success(
-                'Accounts retrieved successfully',
-                [
-                    'accounts' => AccountResource::collection($accounts)
-                ],
-                200
-            );
+            return (new ApiResponse(
+                200,
+                __('AccountsRetrievedSuccessfully'),
+                $responseData
+            ))->send();
 
         } catch (\Exception $e) {
-            Log::error('Get accounts error: ' . $e->getMessage());
-            return ApiResponse::error(
-                'Failed to retrieve accounts',
-                ['error' => $e->getMessage()],
-                500
-            );
+            Log::error('Account retrieval error: ' . $e->getMessage());
+            return (new ApiResponse(
+                500,
+                __('FailedToRetrieveAccounts'),
+                ['error' => $e->getMessage()]
+            ))->send();
         }
     }
 
@@ -59,23 +52,21 @@ class GetAccountsController extends Controller
      */
     private function getUserAccounts(User $authUser)
     {
-        $query = User::query();
+        $query = User::where('active', 1);
 
         if (isset($authUser->phone)) {
-            // If user has phone, get accounts where user_id matches
+            // For users with phone (main accounts)
             $query->where('user_id', $authUser->id);
         } else {
-            // If user doesn't have phone, get accounts where id or user_id matches
+            // For sub-accounts
             $query->where(function($q) use ($authUser) {
                 $q->where('id', $authUser->user_id)
                   ->orWhere('user_id', $authUser->user_id);
             });
         }
 
-        $accounts = $query->get();
-
-        // Remove current user from the list (will be added back later)
-        return $accounts->reject(function ($user) use ($authUser) {
+        // Get accounts excluding current user
+        return $query->get()->reject(function ($user) use ($authUser) {
             return $user->id == $authUser->id;
         });
     }

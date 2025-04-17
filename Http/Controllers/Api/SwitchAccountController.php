@@ -5,11 +5,10 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\UserResource;
 use App\Models\User;
-use App\Response\ApiResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Validation\ValidationException;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Validator;
 
 class SwitchAccountController extends Controller
 {
@@ -17,77 +16,80 @@ class SwitchAccountController extends Controller
     {
         try {
             // Validate request data
-            $validatedData = $request->validate([
-                'id' => 'required|integer|exists:users,id'
+            $validator = Validator::make($request->all(), [
+                'id' => [
+                    'required',
+                    'integer',
+                    'exists:users,id',
+                    function ($attribute, $value, $fail) {
+                        $user = User::find($value);
+                        if ($user && $user->active != 1) {
+                            $fail('The selected account is inactive.');
+                        }
+                    }
+                ]
+            ], [
+                'id.required' => 'Account ID is required',
+                'id.exists' => 'The selected account does not exist',
+                'id.integer' => 'Account ID must be an integer'
             ]);
+
+            if ($validator->fails()) {
+                return response()->json([
+                    'status' => false,
+                    'message' => 'Validation failed',
+                    'errors' => $validator->errors()
+                ], 422);
+            }
 
             // Start database transaction
             DB::beginTransaction();
 
             try {
-                $user = User::findOrFail($validatedData['id']);
-                $authUser = auth()->user();
+                $user = User::findOrFail($request->id);
+                $currentUser = auth()->user();
 
                 // Check if user has permission to switch to this account
-                if (!$this->hasPermissionToSwitch($user, $authUser)) {
-                    return ApiResponse::error(
-                        'Permission denied',
-                        ['account' => ["You don't have permission to switch to this account"]],
-                        403
-                    );
+                if (!($user->user_id === $currentUser->id || $currentUser->user_id === $user->id)) {
+                    return response()->json([
+                        'status' => false,
+                        'message' => 'You do not have permission to switch to this account'
+                    ], 403);
                 }
 
-                // Delete all tokens except the current one
-                $authUser->tokens()->delete();
-                
-                // Generate a new token for the requested account
+                // Delete all tokens for current user
+                $currentUser->tokens()->delete();
+
+                // Create new token for the requested account
                 $token = $user->createToken('API Token')->plainTextToken;
 
                 // Commit transaction
                 DB::commit();
 
-                return ApiResponse::success(
-                    'Account switched successfully',
-                    [
+                return response()->json([
+                    'status' => true,
+                    'message' => 'Account switched successfully',
+                    'data' => [
                         'user' => new UserResource($user),
-                        'token' => $token
-                    ],
-                    200
-                );
+                        'token' => $token,
+                        'token_type' => 'Bearer',
+                        'expires_at' => now()->addDays(30)->toDateTimeString()
+                    ]
+                ], 200);
 
             } catch (\Exception $e) {
-                // Rollback transaction on error
                 DB::rollBack();
                 Log::error('Account switch failed: ' . $e->getMessage());
                 throw $e;
             }
 
-        } catch (ValidationException $e) {
-            return ApiResponse::error(
-                'Validation failed',
-                $e->errors(),
-                422
-            );
         } catch (\Exception $e) {
             Log::error('Account switch error: ' . $e->getMessage());
-            return ApiResponse::error(
-                'Failed to switch account',
-                ['error' => $e->getMessage()],
-                500
-            );
+            return response()->json([
+                'status' => false,
+                'message' => 'Failed to switch account',
+                'errors' => ['error' => $e->getMessage()]
+            ], 500);
         }
-    }
-
-    /**
-     * Check if user has permission to switch to the target account
-     *
-     * @param User $targetUser
-     * @param User $authUser
-     * @return bool
-     */
-    private function hasPermissionToSwitch(User $targetUser, User $authUser)
-    {
-        return $targetUser->user_id === $authUser->id || 
-               $authUser->user_id === $targetUser->id;
     }
 }
