@@ -18,7 +18,7 @@ class ExaminationResource extends JsonResource
             'id' => $this->id,
             'title' => $this->name,
             'description' => $this->description,
-            'image' => optional($this->icon)->getFirstMediaUrl('icons'),
+            'image' => optional($this->icon)->getRelativeMediaUrl('icons'),
             'details' => $this->details ? ExaminationDetailResource::collection($this->details) : [],
         ];
     }

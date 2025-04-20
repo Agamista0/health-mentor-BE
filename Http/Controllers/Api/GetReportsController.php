@@ -30,7 +30,7 @@ class GetReportsController extends Controller
                     return [ 'report' => $mediaItems->map(function ($media) {
                         return [
                             'id' => $media->id,
-                            'image_path' => $media->getUrl(),
+                            'image_path' => '/' . $media->getPathRelativeToRoot(),
                             'key' => ($media->collection_name == 'files') ? 1 : 0,
                             'created_at' => $media->created_at,
                         ];
@@ -45,7 +45,7 @@ class GetReportsController extends Controller
                 })->concat($filesMediaItems)->map(function ($media) {
                     $arr['report'] = array([
                         'id' => $media->id,
-                        'image_path' => $media->getUrl(),
+                        'image_path' => '/' . $media->getPathRelativeToRoot(),
                         'key' => ($media->collection_name == 'files') ? 1 : 0,
                         'created_at' => $media->created_at,
                     ]);

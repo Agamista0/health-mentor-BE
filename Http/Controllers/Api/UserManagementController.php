@@ -17,9 +17,12 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
+use App\Traits\FileUrlTrait;
 
 class UserManagementController extends Controller
 {
+    use FileUrlTrait;
+
     private const MAX_LOGIN_ATTEMPTS = 5;
     private const LOCKOUT_TIME = 15; // minutes
 
@@ -133,7 +136,7 @@ class UserManagementController extends Controller
                     $path = $avatar->store('avatars', 'public');
                     
                     $user->avatar()->create([
-                        'url' => Storage::url($path),
+                        'url' => $this->getRelativeFileUrl($path),
                         'path' => $path
                     ]);
                 }
@@ -244,7 +247,7 @@ class UserManagementController extends Controller
                 $path = $avatar->store('avatars', 'public');
                 
                 $user->avatar()->create([
-                    'url' => Storage::url($path),
+                    'url' => $this->getRelativeFileUrl($path),
                     'path' => $path
                 ]);
             }
@@ -421,5 +424,39 @@ class UserManagementController extends Controller
     private function errorResponse(string $message, array $errors = [], int $status = 400): JsonResponse
     {
         return (new ApiResponse($status, $message, ['errors' => $errors]))->send();
+    }
+
+    public function uploadFile(Request $request)
+    {
+        try {
+            $validator = Validator::make($request->all(), [
+                'file' => 'required|file'
+            ]);
+
+            if ($validator->fails()) {
+                return $this->errorResponse(
+                    __('messages.validation_error'),
+                    $validator->errors(),
+                    422
+                );
+            }
+
+            $path = $request->file('file')->store('public/files');
+            return (new ApiResponse(200, __('api.FileUploadedSuccessfully'), [
+                'url' => $this->getRelativeFileUrl($path),
+            ]))->send();
+
+        } catch (\Exception $e) {
+            Log::error('Error uploading file', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            return $this->errorResponse(
+                __('messages.server_error'),
+                ['error' => $e->getMessage()],
+                500
+            );
+        }
     }
 } 

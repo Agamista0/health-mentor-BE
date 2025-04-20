@@ -31,7 +31,7 @@ class GetExaminationController extends Controller
                         'id' => $exam->id,
                         'title' => $exam->title,
                         'description' => $exam->description,
-                        'image' => $exam->getFirstMediaUrl('images'),
+                        'image' => $exam->getRelativeMediaUrl('images'),
                         'details' => $exam->details->map(function($detail) {
                             return [
                                 'title' => $detail->title,
