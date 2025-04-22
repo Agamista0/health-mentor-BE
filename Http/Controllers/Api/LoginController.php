@@ -49,7 +49,7 @@ class LoginController extends Controller
             }
 
             // Generate OTP
-            $otp = rand(1000, 9999);
+            $otp = rand(100000, 999999);
 
             // Update user's OTP
             $user->update(['otp' => $otp]);

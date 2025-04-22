@@ -61,37 +61,73 @@ class VerifyPhoneController extends Controller
                 ))->send();
             }
 
-            // Generate OTP
-            $otp = rand(1000, 9999);
+            // Start database transaction
+            DB::beginTransaction();
 
-            // Prepare user data
-            $newUserData = [
-                'full_name' => $request->name,
-                'gender' => $request->gender,
-                'country_code' => $request->country_code,
-                'phone' => $request->phone,
-                'otp' => $otp,
-                'age' => $request->age,
-            ];
+            try {
+                // Generate OTP
+                $otp = rand(100000, 999999);
 
-            // Prepare avatar data
-            $avatarData = [
-                'skin' => $request->skin,
-                'eye_color' => $request->eye_color,
-                'hair_style' => $request->hair_style,
-                'hair_color' => $request->hair_color,
-            ];
+                // Prepare user data
+                $newUserData = [
+                    'full_name' => $request->name,
+                    'gender' => $request->gender,
+                    'country_code' => $request->country_code,
+                    'phone' => $request->phone,
+                    'otp' => $otp,
+                    'age' => $request->age,
+                ];
 
-            // Store data in cache for OTP verification
-            Cache::put('newUserData', $newUserData, now()->addMinutes(10));
-            Cache::put('avatarData', $avatarData, now()->addMinutes(10));
-            Cache::put('account_questions', $request->account_questions, now()->addMinutes(10));
+                // Create new user
+                $user = User::create($newUserData);
 
-            return (new ApiResponse(
-                200,
-                __('messages.otp_sent_successfully'),
-                ['otp' => $otp]
-            ))->send();
+                // Create avatar
+                $user->avatar()->create([
+                    'skin' => $request->skin,
+                    'eye_color' => $request->eye_color,
+                    'hair_style' => $request->hair_style,
+                    'hair_color' => $request->hair_color,
+                ]);
+
+                // Handle account questions if provided
+                if (isset($request->account_questions)) {
+                    foreach ($request->account_questions as $question) {
+                        foreach ($question['answers'] as $answer) {
+                            $dataToInsert = [
+                                'user_id' => $user->id,
+                                'question_id' => $question['id'],
+                            ];
+
+                            if (isset($question['unit_id'])) {
+                                $dataToInsert['value'] = $answer;
+                                $dataToInsert['unit_id'] = $question['unit_id'];
+                            } else {
+                                $dataToInsert['answer_id'] = $answer;
+                            }
+
+                            AnswerUser::create($dataToInsert);
+                        }
+                    }
+                }
+
+                // Generate authentication token
+                $token = $user->createToken('API Token')->plainTextToken;
+
+                DB::commit();
+
+                return (new ApiResponse(
+                    200,
+                    __('messages.user_created_successfully'),
+                    data: [
+                        'token' => $token,
+                        'otp' => $otp
+                    ]
+                ))->send();
+
+            } catch (\Exception $e) {
+                DB::rollBack();
+                throw $e;
+            }
 
         } catch (\Exception $e) {
             Log::error('Phone verification error: ' . $e->getMessage(), [
