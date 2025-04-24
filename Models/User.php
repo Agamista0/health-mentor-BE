@@ -20,12 +20,18 @@ class User extends Authenticatable implements HasMedia
      *
      * @var array<int, string>
      */
-    // protected $fillable = [
-    //     'name',
-    //     'email',
-    //     'password',
-    // ];
-    protected $guarded = [];
+    protected $fillable = [
+        'full_name',
+        'email',
+        'phone',
+        'country_code',
+        'gender',
+        'age',
+        'firebase_uid',
+        'firebase_session',
+        'email_verified_at',
+        'phone_verified_at'
+    ];
 
     /**
      * The attributes that should be hidden for serialization.
@@ -33,7 +39,8 @@ class User extends Authenticatable implements HasMedia
      * @var array<int, string>
      */
     protected $hidden = [
-        'password',
+        'firebase_uid',
+        'firebase_session',
         'remember_token',
     ];
 
@@ -44,7 +51,7 @@ class User extends Authenticatable implements HasMedia
      */
     protected $casts = [
         'email_verified_at' => 'datetime',
-        'password' => 'hashed',
+        'phone_verified_at' => 'datetime',
     ];
 
     public function avatar(){

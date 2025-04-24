@@ -3,22 +3,25 @@
 namespace App\Http\Controllers\Api;
 
 use App\Models\User;
-use App\Models\Section;
-use App\Models\AnswerUser;
-use App\Models\BodyStatus;
-use Illuminate\Http\Request;
 use App\Response\ApiResponse;
-use App\Models\BodyStatusDetail;
+use App\Services\FirebaseService;
 use App\Http\Controllers\Controller;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Validator;
 
 class VerifyOTPController extends Controller
 {
+    protected $firebaseService;
+
+    public function __construct(FirebaseService $firebaseService)
+    {
+        $this->firebaseService = $firebaseService;
+    }
+
     /**
-     * Verify OTP and handle user authentication/registration
+     * Verify OTP and authenticate user
      *
      * @param Request $request
      * @return \Illuminate\Http\JsonResponse
@@ -28,9 +31,11 @@ class VerifyOTPController extends Controller
         try {
             // Validate request data
             $validator = Validator::make($request->all(), [
-                'phone' => 'required|string|max:20',
-                'country_code' => 'required|string|max:5',
-                'otp' => 'required|string|size:4'
+                'email' => 'required_without_all:phone,country_code|email',
+                'phone' => 'required_without:email|string|max:20',
+                'country_code' => 'required_with:phone|string|max:5',
+                'otp' => 'required|string|size:6',
+                'session_info' => 'required_with:phone'
             ]);
 
             if ($validator->fails()) {
@@ -41,127 +46,90 @@ class VerifyOTPController extends Controller
                 ))->send();
             }
 
-            // Start database transaction
             DB::beginTransaction();
 
             try {
-                // Check if user exists with the given OTP and phone
-                $user = User::where('otp', $request->otp)
-                    ->where('phone', $request->phone)
-                    ->where('country_code', $request->country_code)
-                    ->first();
+                // Find user
+                $user = null;
+                if ($request->filled('email')) {
+                    $user = User::where('email', $request->email)->first();
+                } else {
+                    $user = User::where('phone', $request->phone)
+                            ->where('country_code', $request->country_code)
+                            ->first();
+                }
 
-                if ($user) {
-                    // Generate authentication token
-                    $token = $user->createToken('API Token')->plainTextToken;
-
-                    DB::commit();
-
+                if (!$user) {
+                    DB::rollBack();
                     return (new ApiResponse(
-                        200,
-                        __('messages.user_logged_in_successfully'),
-                        ['token' => $token]
+                        404,
+                        __('messages.user_not_found'),
+                        ['message' => 'User not found.']
                     ))->send();
                 }
 
-                // If user doesn't exist, create new user from cached data
-                $newUserData = Cache::get('newUserData');
-                $avatarData = Cache::get('avatarData');
-                $account_questions = Cache::get('account_questions');
+                // Verify with Firebase
+                $verificationResult = null;
+                if ($request->filled('email')) {
+                    $verificationResult = $this->firebaseService->verifyEmailOTP($request->email, $request->otp);
+                } else {
+                    $verificationResult = $this->firebaseService->verifyPhoneOTP($request->session_info, $request->otp);
+                }
 
-                if (!$newUserData || !$avatarData) {
+                if (!$verificationResult['success']) {
                     DB::rollBack();
                     return (new ApiResponse(
                         400,
-                        __('messages.invalid_or_expired_otp'),
-                        []
+                        __('messages.invalid_otp'),
+                        ['error' => $verificationResult['error']]
                     ))->send();
                 }
 
-                // Create new user
-                $user = User::create($newUserData);
-                $user->avatar()->create($avatarData);
-
-                // Handle account questions if provided
-                if (isset($account_questions)) {
-                    foreach ($account_questions as $question) {
-                        foreach ($question['answers'] as $answer) {
-                            $dataToInsert = [
-                                'user_id' => $user->id,
-                                'question_id' => $question['id'],
-                            ];
-
-                            if (isset($question['unit_id'])) {
-                                $dataToInsert['value'] = $answer;
-                                $dataToInsert['unit_id'] = $question['unit_id'];
-                            } else {
-                                $dataToInsert['answer_id'] = $answer;
-                            }
-
-                            AnswerUser::create($dataToInsert);
-                        }
-                    }
+                // Update verification status and Firebase UID
+                if ($request->filled('email')) {
+                    $user->email_verified_at = now();
+                } else {
+                    $user->phone_verified_at = now();
                 }
-
-                // Create body status and details
-                $sections = Section::where('name', '!=', 'On Boarding')->get();
-                $body_status = BodyStatus::create([
-                    'user_id' => $user->id,
-                    'status_mode' => 'empty',
-                    'status_note' => null,
-                ]);
-
-                foreach ($sections as $section) {
-                    BodyStatusDetail::create([
-                        'section_id' => $section->id,
-                        'body_status_id' => $body_status->id,
-                    ]);
-                }
-
-                // Clear cache
-                Cache::forget('newUserData');
-                Cache::forget('avatarData');
-                Cache::forget('account_questions');
-
-                // Generate token for new user
-                $token = $user->createToken('API Token')->plainTextToken;
+                
+                $user->firebase_uid = $verificationResult['uid'];
+                $user->save();
 
                 DB::commit();
 
                 return (new ApiResponse(
-                    201,
-                    __('messages.user_created_successfully'),
-                    ['token' => $token]
+                    200,
+                    __('messages.verification_successful'),
+                    [
+                        'token' => $verificationResult['token'],
+                        'user' => [
+                            'id' => $user->id,
+                            'name' => $user->full_name,
+                            'email' => $user->email,
+                            'phone' => $user->phone,
+                            'country_code' => $user->country_code,
+                            'email_verified' => !is_null($user->email_verified_at),
+                            'phone_verified' => !is_null($user->phone_verified_at)
+                        ]
+                    ]
                 ))->send();
 
             } catch (\Exception $e) {
                 DB::rollBack();
-                Log::error('User creation/verification failed: ' . $e->getMessage(), [
-                    'trace' => $e->getTraceAsString()
-                ]);
                 throw $e;
             }
 
         } catch (\Exception $e) {
-            Log::error('OTP verification error: ' . $e->getMessage(), [
+            Log::error('Verification error: ' . $e->getMessage(), [
                 'trace' => $e->getTraceAsString()
             ]);
 
             return (new ApiResponse(
                 500,
                 __('messages.server_error'),
-                ['error' => $e->getMessage()]
+                ['error' => 'Verification failed.']
             ))->send();
         }
-    }
-
-    public function valid($requestData)
-    {
-        $validator = Validator::make($requestData, [
-            'otp' => 'required',
-        ]);
-
-        return $validator;
     }
 }
 

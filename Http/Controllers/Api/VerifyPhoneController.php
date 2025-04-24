@@ -9,6 +9,7 @@ use App\Models\BodyStatus;
 use Illuminate\Http\Request;
 use App\Models\BodyStatusDetail;
 use App\Http\Controllers\Controller;
+use App\Services\FirebaseService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Cache;
@@ -17,8 +18,15 @@ use App\Response\ApiResponse;
 
 class VerifyPhoneController extends Controller
 {
+    protected $firebaseService;
+
+    public function __construct(FirebaseService $firebaseService)
+    {
+        $this->firebaseService = $firebaseService;
+    }
+
     /**
-     * Handle phone verification request
+     * Handle registration request with Firebase verification
      *
      * @param Request $request
      * @return \Illuminate\Http\JsonResponse
@@ -30,8 +38,9 @@ class VerifyPhoneController extends Controller
             $validator = Validator::make($request->all(), [
                 'name' => 'required|string|max:255',
                 'gender' => 'required|integer|in:0,1',
-                'country_code' => 'required|string|max:5',
-                'phone' => 'required|string|max:20',
+                'email' => 'nullable|email|unique:users,email',
+                'country_code' => 'required_without:email|string|max:5',
+                'phone' => 'required_without:email|string|max:20|unique:users,phone',
                 'age' => 'required|integer|min:1|max:120',
                 'skin' => 'required|integer|in:0,1,2',
                 'eye_color' => 'required|integer|in:0,1',
@@ -51,35 +60,46 @@ class VerifyPhoneController extends Controller
                 ))->send();
             }
 
-            // Check if user already exists
-            $existingUser = User::where('phone', $request->phone)->first();
-            if ($existingUser) {
-                return (new ApiResponse(
-                    409,
-                    __('messages.account_already_exists'),
-                    []
-                ))->send();
-            }
-
             // Start database transaction
             DB::beginTransaction();
 
             try {
-                // Generate OTP
-                $otp = rand(100000, 999999);
+                // Initiate Firebase verification first
+                $verificationResult = null;
+                if ($request->filled('email')) {
+                    $verificationResult = $this->firebaseService->startEmailVerification($request->email, $request->name);
+                } else {
+                    $verificationResult = $this->firebaseService->startPhoneVerification($request->phone, $request->country_code);
+                }
+
+                if (!$verificationResult['success']) {
+                    DB::rollBack();
+                    return (new ApiResponse(
+                        400,
+                        __('messages.verification_failed'),
+                        ['error' => $verificationResult['error']]
+                    ))->send();
+                }
 
                 // Prepare user data
-                $newUserData = [
+                $userData = [
                     'full_name' => $request->name,
                     'gender' => $request->gender,
-                    'country_code' => $request->country_code,
-                    'phone' => $request->phone,
-                    'otp' => $otp,
                     'age' => $request->age,
+                    'firebase_uid' => $verificationResult['uid'] ?? null
                 ];
 
-                // Create new user
-                $user = User::create($newUserData);
+                // Add either email or phone details
+                if ($request->filled('email')) {
+                    $userData['email'] = $request->email;
+                } else {
+                    $userData['country_code'] = $request->country_code;
+                    $userData['phone'] = $request->phone;
+                    $userData['firebase_session'] = $verificationResult['sessionInfo'] ?? null;
+                }
+
+                // Create user
+                $user = User::create($userData);
 
                 // Create avatar
                 $user->avatar()->create([
@@ -89,7 +109,7 @@ class VerifyPhoneController extends Controller
                     'hair_color' => $request->hair_color,
                 ]);
 
-                // Handle account questions if provided
+                // Handle account questions
                 if (isset($request->account_questions)) {
                     foreach ($request->account_questions as $question) {
                         foreach ($question['answers'] as $answer) {
@@ -110,17 +130,31 @@ class VerifyPhoneController extends Controller
                     }
                 }
 
-                // Generate authentication token
-                $token = $user->createToken('API Token')->plainTextToken;
+                // Create body status
+                $sections = Section::where('name', '!=', 'On Boarding')->get();
+                $body_status = BodyStatus::create([
+                    'user_id' => $user->id,
+                    'status_mode' => 'empty',
+                    'status_note' => null,
+                ]);
+
+                foreach ($sections as $section) {
+                    BodyStatusDetail::create([
+                        'section_id' => $section->id,
+                        'body_status_id' => $body_status->id,
+                    ]);
+                }
 
                 DB::commit();
 
                 return (new ApiResponse(
                     200,
-                    __('messages.user_created_successfully'),
-                    data: [
-                        'token' => $token,
-                        'otp' => $otp
+                    __('messages.registration_verification_sent'),
+                    [
+                        'verification_type' => $verificationResult['verification_type'],
+                        'session_info' => $verificationResult['sessionInfo'] ?? null,
+                        'otp' => $verificationResult['otp'] ?? null, // Remove in production
+                        'user_id' => $user->id
                     ]
                 ))->send();
 
@@ -130,14 +164,14 @@ class VerifyPhoneController extends Controller
             }
 
         } catch (\Exception $e) {
-            Log::error('Phone verification error: ' . $e->getMessage(), [
+            Log::error('Registration error: ' . $e->getMessage(), [
                 'trace' => $e->getTraceAsString()
             ]);
 
             return (new ApiResponse(
                 500,
                 __('messages.server_error'),
-                ['error' => $e->getMessage()]
+                ['error' => 'Registration failed. Please try again.']
             ))->send();
         }
     }
