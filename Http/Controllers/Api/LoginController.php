@@ -95,11 +95,6 @@ class LoginController extends Controller
         return (new ApiResponse(
             200,
             __('messages.otp_created_successfully'),
-            [
-                'otp' => $otp,
-                'token' => $token,
-                'auth_type' => 'email'
-            ]
         ))->send();
     }
 

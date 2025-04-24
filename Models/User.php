@@ -30,7 +30,8 @@ class User extends Authenticatable implements HasMedia
         'firebase_uid',
         'firebase_session',
         'email_verified_at',
-        'phone_verified_at'
+        'phone_verified_at',
+        'otp'
     ];
 
     /**

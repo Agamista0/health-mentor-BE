@@ -148,11 +148,6 @@ class VerifyPhoneController extends Controller
         return (new ApiResponse(
             200,
             __('messages.user_created_successfully'),
-            [
-                'token' => $token,
-                'otp' => $otp,
-                'auth_type' => 'email'
-            ]
         ))->send();
     }
 
@@ -204,7 +199,6 @@ class VerifyPhoneController extends Controller
                 __('messages.user_created_successfully'),
                 [
                     'token' => $token,
-                    'auth_type' => 'phone',
                     'firebase_uid' => $firebaseToken->claims()->get('sub')
                 ]
             ))->send();
