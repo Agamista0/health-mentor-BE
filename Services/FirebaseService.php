@@ -10,20 +10,16 @@ use Illuminate\Support\Facades\Log;
 class FirebaseService
 {
     protected $auth;
+    protected $firebase;
     protected $defaultCountryCode = '+966';
 
     public function __construct()
     {
-        try {
-            $factory = (new Factory)
-                ->withServiceAccount(base_path(env('FIREBASE_CREDENTIALS')))
-                ->withProjectId(env('FIREBASE_PROJECT_ID'));
-
-            $this->auth = $factory->createAuth();
-        } catch (Exception $e) {
-            Log::error('Firebase initialization failed: ' . $e->getMessage());
-            throw $e;
-        }
+        $this->firebase = (new Factory)
+            ->withServiceAccount(storage_path('app/firebase-credentials.json'))
+            ->withDatabaseUri('https://mohja-app.firebaseio.com');
+            
+        $this->auth = $this->firebase->createAuth();
     }
 
     /**
@@ -457,6 +453,55 @@ class FirebaseService
                 'success' => false,
                 'error' => $e->getMessage()
             ];
+        }
+    }
+
+    /**
+     * Verify Firebase ID token
+     */
+    public function verifyToken(string $idToken)
+    {
+        try {
+            return $this->auth->verifyIdToken($idToken);
+        } catch (Exception $e) {
+            throw new Exception('Invalid Firebase token: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Get user by phone number
+     */
+    public function getUserByPhone(string $phoneNumber)
+    {
+        try {
+            return $this->auth->getUserByPhoneNumber($phoneNumber);
+        } catch (Exception $e) {
+            return null;
+        }
+    }
+
+    /**
+     * Create or update user with phone number
+     */
+    public function createOrUpdateUser(string $phoneNumber, array $userData = [])
+    {
+        try {
+            $properties = array_merge([
+                'phoneNumber' => $phoneNumber,
+                'disabled' => false
+            ], $userData);
+
+            // Try to get existing user
+            try {
+                $user = $this->auth->getUserByPhoneNumber($phoneNumber);
+                // Update user if exists
+                return $this->auth->updateUser($user->uid, $properties);
+            } catch (\Exception $e) {
+                // Create new user if doesn't exist
+                return $this->auth->createUser($properties);
+            }
+        } catch (Exception $e) {
+            throw new Exception('Failed to create/update Firebase user: ' . $e->getMessage());
         }
     }
 } 
